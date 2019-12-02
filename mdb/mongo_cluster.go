@@ -258,9 +258,10 @@ func (mc *MongoCluster) GetClusterInfo() (bson.M, error) {
 	}
 	fmt.Fprintf(os.Stderr, "\r     \r")
 	mc.cluster["databases"] = databases
-	log.Println("cluster info")
-	log.Println(gox.Stringify(gox.Stringify(mc.cluster)))
-	if err = gox.OutputGzipped([]byte(gox.Stringify(mc.cluster)), mc.filename); err == nil {
+	clusterJSON := gox.Stringify(mc.cluster)
+	log.Println("cluster info", len(clusterJSON))
+	log.Println(clusterJSON)
+	if err = gox.OutputGzipped([]byte(clusterJSON), mc.filename); err == nil {
 		fmt.Println("JSON is written to", mc.filename)
 	}
 	return mc.cluster, err
@@ -276,6 +277,10 @@ func convertDecimal128ToFloa64(firstDoc bson.M) bson.M {
 			firstDoc[k], _ = strconv.ParseFloat(v.(primitive.Decimal128).String(), 64)
 		} else if t == "primitive.M" {
 			firstDoc[k] = convertDecimal128ToFloa64(v.(bson.M))
+		} else if t == "primitive.Binary" {
+			firstDoc[k] = primitive.Binary{}
+		} else if t == "string" && len(fmt.Sprintf("%v", v)) > 32 {
+			firstDoc[k] = fmt.Sprintf("string:%v", len(fmt.Sprintf("%v", v)))
 		} else {
 			// fmt.Println(t)
 		}
