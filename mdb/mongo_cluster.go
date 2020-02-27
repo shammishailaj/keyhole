@@ -110,18 +110,21 @@ func (mc *MongoCluster) GetClusterInfo() (bson.M, error) {
 					cluster["cluster"] = sinfo.Cluster
 					cluster["host"] = sinfo.Host
 					cluster["process"] = sinfo.Process
-					if hostInfo, err := RunAdminCommand(mc.client, "hostInfo"); err == nil {
+					if hostInfo, err := RunAdminCommand(client, "hostInfo"); err == nil {
 						cluster["hostInfo"] = trimMap(hostInfo)
 					}
-					if buildInfo, err := RunAdminCommand(mc.client, "buildInfo"); err == nil {
+					if buildInfo, err := RunAdminCommand(client, "buildInfo"); err == nil {
 						cluster["buildInfo"] = trimMap(buildInfo)
 					}
 					if sinfo.Cluster == "replica" {
 						cluster["oplog"] = sinfo.Repl["oplog"]
 						var replSetGetStatus bson.M
-						if replSetGetStatus, err = RunAdminCommand(mc.client, "replSetGetStatus"); err == nil {
+						if replSetGetStatus, err = RunAdminCommand(client, "replSetGetStatus"); err == nil {
 							cluster["replSetGetStatus"] = trimMap(replSetGetStatus)
 						}
+					}
+					if serverStatus, err := RunAdminCommand(client, "serverStatus"); err == nil {
+						cluster["serverStatus"] = trimMap(serverStatus)
 					}
 					shards = append(shards, cluster)
 				}
