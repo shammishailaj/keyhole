@@ -19,6 +19,7 @@ import (
 type IndexesReader struct {
 	client  *mongo.Client
 	dbName  string
+	nocolor bool
 	verbose bool
 }
 
@@ -49,6 +50,11 @@ type IndexStatsDoc struct {
 // NewIndexesReader establish seeding parameters
 func NewIndexesReader(client *mongo.Client) *IndexesReader {
 	return &IndexesReader{client: client}
+}
+
+// SetNoColor set nocolor flag
+func (ir *IndexesReader) SetNoColor(nocolor bool) {
+	ir.nocolor = nocolor
 }
 
 // SetVerbose sets verbose level
@@ -110,11 +116,17 @@ func (ir *IndexesReader) GetIndexesFromDB(dbName string) (bson.M, error) {
 	for cur.Next(ctx) {
 		var elem = bson.M{}
 		if err = cur.Decode(&elem); err != nil {
+			if ir.verbose == true {
+				log.Println(err)
+			}
 			continue
 		}
 		coll := fmt.Sprintf("%v", elem["name"])
 		collType := fmt.Sprintf("%v", elem["type"])
 		if strings.Index(coll, "system.") == 0 || (elem["type"] != nil && collType != "collection") {
+			if ir.verbose == true {
+				log.Println("skip", coll)
+			}
 			continue
 		}
 		collections = append(collections, coll)
@@ -135,15 +147,23 @@ func (ir *IndexesReader) GetIndexesFromCollection(collection *mongo.Collection) 
 	var list []IndexStatsDoc
 	var icur *mongo.Cursor
 	var scur *mongo.Cursor
+	if ir.verbose {
+		log.Println("process GetIndexesFromCollection")
+	}
 
 	if scur, err = collection.Aggregate(ctx, pipeline); err != nil {
-		// fmt.Println(err)
+		if ir.verbose == true {
+			log.Println(err)
+		}
 		return list
 	}
 	var indexStats = []bson.M{}
 	for scur.Next(ctx) {
 		var result = bson.M{}
 		if err = scur.Decode(&result); err != nil {
+			if ir.verbose == true {
+				log.Println(err)
+			}
 			continue
 		}
 		indexStats = append(indexStats, result)
@@ -151,6 +171,9 @@ func (ir *IndexesReader) GetIndexesFromCollection(collection *mongo.Collection) 
 	scur.Close(ctx)
 	indexView := collection.Indexes()
 	if icur, err = indexView.List(ctx); err != nil {
+		if ir.verbose == true {
+			log.Println(err)
+		}
 		return list
 	}
 	defer icur.Close(ctx)
@@ -158,6 +181,9 @@ func (ir *IndexesReader) GetIndexesFromCollection(collection *mongo.Collection) 
 	for icur.Next(ctx) {
 		var idx = bson.D{}
 		if err = icur.Decode(&idx); err != nil {
+			if ir.verbose == true {
+				log.Println(err)
+			}
 			continue
 		}
 
@@ -188,6 +214,9 @@ func (ir *IndexesReader) GetIndexesFromCollection(collection *mongo.Collection) 
 		// Check shard keys
 		var v bson.M
 		ns := collection.Database().Name() + "." + collection.Name()
+		if ir.verbose {
+			log.Println("process", ns)
+		}
 		if err = ir.client.Database("config").Collection("collections").FindOne(ctx, bson.M{"_id": ns, "key": keys}).Decode(&v); err == nil {
 			o.IsShardKey = true
 		}
@@ -251,17 +280,28 @@ func (ir *IndexesReader) Print(indexesMap bson.M) {
 			buffer.WriteString(ns)
 			buffer.WriteString(":\n")
 			for _, o := range list {
-				font := "\x1b[0m  "
+				font := codeDefault
+				tailCode := codeDefault
+				if ir.nocolor {
+					font = ""
+					tailCode = ""
+				}
 				if o.Key == "{ _id: 1 }" {
+					buffer.WriteString(fmt.Sprintf("%v  %v%v", font, o.Key, tailCode))
 				} else if o.IsShardKey == true {
-					font = "\x1b[0m* "
+					buffer.WriteString(fmt.Sprintf("%v* %v%v", font, o.Key, tailCode))
 				} else if o.IsDupped == true {
-					font = "\x1b[31;1mx " // red
+					if ir.nocolor == false {
+						font = codeRed
+					}
+					buffer.WriteString(fmt.Sprintf("%vx %v%v", font, o.Key, tailCode))
 				} else if o.TotalOps == 0 {
-					font = "\x1b[34;1m? " // blue
+					if ir.nocolor == false {
+						font = codeBlue
+					}
+					buffer.WriteString(fmt.Sprintf("%v? %v%v", font, o.Key, tailCode))
 				}
 
-				buffer.WriteString(font + o.Key + "\x1b[0m")
 				for _, u := range o.Usage {
 					buffer.Write([]byte("\n\thost: " + u.Host + ", ops: " + fmt.Sprintf("%v", u.Accesses.Ops) + ", since: " + fmt.Sprintf("%v", u.Accesses.Since)))
 				}

@@ -6,12 +6,12 @@ import (
 	"context"
 	"encoding/json"
 	"io/ioutil"
+	"strings"
 	"time"
 
 	"github.com/simagix/keyhole/mdb"
 	"github.com/simagix/keyhole/sim/util"
 	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
@@ -124,21 +124,23 @@ func execTx(c *mongo.Collection, doc bson.M) (bson.M, error) {
 	var tm []time.Time
 	var execTime = bson.M{}
 	ctx := context.Background()
-	ts := time.Now()
-	change := bson.M{"$set": bson.M{"timestamp": ts}}
-	o := primitive.NewObjectID()
-	doc["_id"] = o
-	doc["ts"] = ts
+	doc["ts"] = time.Now()
+	email := util.GetEmailAddress()
+	s := strings.Split(strings.Split(email, "@")[0], ".")
+	doc["email"] = email
+	doc["firstName"] = s[0]
+	doc["lastName"] = s[2]
 	tm = append(tm, time.Now())
 	if _, err = c.InsertOne(ctx, doc); err != nil {
 		return execTime, err
 	}
-	filter := bson.D{{Key: "_id", Value: o}}
+	filter := bson.D{{Key: "email", Value: email}}
 	tm = append(tm, time.Now())
 	if c.FindOne(ctx, filter).Err() != nil {
 		return execTime, err
 	}
 	tm = append(tm, time.Now())
+	change := bson.M{"$set": bson.M{"timestamp": time.Now()}}
 	if _, err = c.UpdateOne(ctx, filter, change); err != nil {
 		return execTime, err
 	}

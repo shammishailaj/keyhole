@@ -3,10 +3,12 @@
 package main
 
 import (
-	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
+	"net"
+	"net/http"
 	"os"
 	"runtime"
 	"strings"
@@ -23,9 +25,7 @@ import (
 var version = "self-built"
 
 func main() {
-	caFile := flag.String("sslCAFile", "", "CA file")
 	changeStreams := flag.Bool("changeStreams", false, "change streams watch")
-	clientPEMFile := flag.String("sslPEMKeyFile", "", "client PEM file")
 	collection := flag.String("collection", "", "collection name to print schema")
 	collscan := flag.Bool("collscan", false, "list only COLLSCAN (with --loginfo)")
 	cardinality := flag.String("cardinality", "", "check collection cardinality")
@@ -40,25 +40,39 @@ func main() {
 	index := flag.Bool("index", false, "get indexes info")
 	info := flag.Bool("info", false, "get cluster info | Atlas info (atlas://user:key)")
 	loginfo := flag.Bool("loginfo", false, "log performance analytic from file or Atlas")
+	nocolor := flag.Bool("nocolor", false, "disable color codes")
 	peek := flag.Bool("peek", false, "only collect stats")
 	pause := flag.Bool("pause", false, "pause an Atlas cluster atlas://user:key@group/cluster")
 	pipe := flag.String("pipeline", "", "aggregation pipeline")
+	port := flag.Int("port", 5408, "web server port number")
 	regex := flag.String("regex", "", "regex pattern for loginfo")
 	request := flag.String("request", "", "Atlas API command")
 	resume := flag.Bool("resume", false, "resume an Atlas cluster atlas://user:key@group/cluster")
 	schema := flag.Bool("schema", false, "print schema")
 	seed := flag.Bool("seed", false, "seed a database for demo")
 	simonly := flag.Bool("simonly", false, "simulation only mode")
-	span := flag.Int("span", -1, "granunarity for summary")
+	sslCAFile := flag.String("sslCAFile", "", "CA file")
+	sslPEMKeyFile := flag.String("sslPEMKeyFile", "", "client PEM file")
+	tlsCAFile := flag.String("tlsCAFile", "", "TLS CA file")
+	tlsCertificateKeyFile := flag.String("tlsCertificateKeyFile", "", "TLS CertificateKey File")
 	tps := flag.Int("tps", 20, "number of trasaction per second per connection")
 	total := flag.Int("total", 1000, "nuumber of documents to create")
 	tx := flag.String("tx", "", "file with defined transactions")
 	uri := flag.String("uri", "", "MongoDB URI") // orverides connection uri from args
 	ver := flag.Bool("version", false, "print version number")
 	verbose := flag.Bool("v", false, "verbose")
+	vv := flag.Bool("vv", false, "very verbose")
 	webserver := flag.Bool("web", false, "enable web server")
+	wt := flag.Bool("wt", false, "visualize wiredTiger cache usage")
+	yes := flag.Bool("yes", false, "bypass confirmation")
 
 	flag.Parse()
+	if *tlsCAFile == "" && *sslCAFile != "" {
+		*tlsCAFile = *sslCAFile
+	}
+	if *tlsCertificateKeyFile == "" && *sslPEMKeyFile != "" {
+		*tlsCertificateKeyFile = *sslPEMKeyFile
+	}
 	if *uri == "" && len(flag.Args()) > 0 {
 		*uri = flag.Arg(0)
 	}
@@ -87,9 +101,9 @@ func main() {
 			for _, filename := range api.GetLogNames() {
 				fmt.Println("=> processing", filename)
 				var str string
-				li := mdb.NewLogInfo(filename)
+				li := mdb.NewLogInfo()
 				li.SetVerbose(*verbose)
-				if str, err = li.Analyze(); err != nil {
+				if str, err = li.Analyze(filename); err != nil {
 					log.Println(err)
 					continue
 				}
@@ -97,30 +111,52 @@ func main() {
 			}
 		}
 		os.Exit(0)
+	} else if *webserver {
+		filenames := append([]string{*diag}, flag.Args()...)
+		addr := fmt.Sprintf(":%d", *port)
+		if listener, err := net.Listen("tcp", addr); err != nil {
+			log.Fatal(err)
+		} else {
+			listener.Close()
+		}
+		metrics := anly.NewMetrics()
+		metrics.ProcessFiles(filenames)
+		log.Fatal(http.ListenAndServe(addr, nil))
 	} else if *diag != "" {
 		filenames := append([]string{*diag}, flag.Args()...)
-		if *webserver == true { // backward compatible
-			anly.SingleJSONServer(filenames)
+		metrics := anly.NewDiagnosticData()
+		if str, e := metrics.PrintDiagnosticData(filenames); e != nil {
+			log.Fatal(e)
 		} else {
-			metrics := anly.NewDiagnosticData(*span)
-			if str, e := metrics.PrintDiagnosticData(filenames); e != nil {
-				log.Fatal(e)
-			} else {
-				fmt.Println(str)
-			}
+			fmt.Println(str)
 		}
 		os.Exit(0)
 	} else if *loginfo {
 		if len(flag.Args()) < 1 {
 			log.Fatal("Usage: keyhole --loginfo filename")
 		}
-		for _, filename := range flag.Args() {
+		filenames := []string{}
+		for i, arg := range flag.Args() { // backward compatible
+			if arg == "-collscan" || arg == "--collscan" {
+				*collscan = true
+			} else if arg == "-silent" || arg == "--silent" {
+				*nocolor = true
+			} else if arg == "-v" || arg == "--v" {
+				*verbose = true
+			} else if (arg == "-regex" || arg == "--regex") && *regex != "" {
+				*regex = flag.Args()[i+1]
+			} else {
+				filenames = append(filenames, arg)
+			}
+		}
+		li := mdb.NewLogInfo()
+		li.SetRegexPattern(*regex)
+		li.SetCollscan(*collscan)
+		li.SetVerbose(*verbose)
+		li.SetSilent(*nocolor)
+		for _, filename := range filenames {
 			var str string
-			li := mdb.NewLogInfo(filename)
-			li.SetRegexPattern(*regex)
-			li.SetCollscan(*collscan)
-			li.SetVerbose(*verbose)
-			if str, err = li.Analyze(); err != nil {
+			if str, err = li.Analyze(filename); err != nil {
 				log.Fatal(err)
 			}
 			fmt.Println(str)
@@ -131,13 +167,6 @@ func main() {
 		os.Exit(0)
 	} else if *ver {
 		fmt.Println("keyhole", version)
-		os.Exit(0)
-	} else if *schema && *uri == "" {
-		if *file == "" {
-			fmt.Println(util.GetDemoSchema())
-		} else {
-			fmt.Println(util.GetDemoFromFile(*file))
-		}
 		os.Exit(0)
 	} else if *explain != "" && *uri == "" { //--explain file.json.gz (w/o uri)
 		exp := mdb.NewExplain()
@@ -152,11 +181,7 @@ func main() {
 		os.Exit(0)
 	}
 
-	if *uri, err = mdb.Parse(*uri); err != nil {
-		log.Fatal(err)
-	}
-
-	client, err := mdb.NewMongoClient(*uri, *caFile, *clientPEMFile)
+	client, err := mdb.NewMongoClient(*uri, *tlsCAFile, *tlsCertificateKeyFile)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -168,12 +193,12 @@ func main() {
 	if *info == true {
 		mc := mdb.NewMongoCluster(client)
 		mc.SetVerbose(*verbose)
+		mc.SetVeryVerbose(*vv)
 		mc.SetConnString(connString)
 		mc.SetDoodleMode(*doodle)
 		if doc, e := mc.GetClusterInfo(); e != nil {
-			fmt.Println(e)
 			log.Fatal(e)
-		} else if *verbose == false {
+		} else if *verbose == false && *vv == false {
 			fmt.Println(gox.Stringify(doc, "", "  "))
 		}
 		os.Exit(0)
@@ -191,6 +216,7 @@ func main() {
 		os.Exit(0)
 	} else if *index == true {
 		ir := mdb.NewIndexesReader(client)
+		ir.SetNoColor(*nocolor)
 		if connString.Database == mdb.KEYHOLEDB {
 			connString.Database = ""
 		}
@@ -203,8 +229,12 @@ func main() {
 		ir.Print(m)
 		os.Exit(0)
 	} else if *schema == true {
+		if *collection == "" {
+			log.Fatal("usage: keyhole [-v] --schema --collection collection_name <mongodb_uri>")
+		}
+		c := client.Database(connString.Database).Collection(*collection)
 		var str string
-		if str, err = sim.GetSchemaFromCollection(client, connString.Database, *collection); err != nil {
+		if str, err = sim.GetSchema(c, *verbose); err != nil {
 			log.Fatal(err)
 		}
 		fmt.Println(str)
@@ -234,22 +264,37 @@ func main() {
 		os.Exit(0)
 	}
 
-	client.Disconnect(context.Background())
+	go func() {
+		http.HandleFunc("/", gox.Cors(handler))
+		addr := fmt.Sprintf(":%d", *port)
+		log.Println(http.ListenAndServe(addr, nil))
+	}()
+	if *wt == true {
+		wtc := mdb.NewWiredTigerCache(client)
+		log.Printf("URL: http://localhost:%d/wt\n", *port)
+		wtc.Start()
+	}
+
 	var runner *sim.Runner
-	if runner, err = sim.NewRunner(*uri, *caFile, *clientPEMFile); err != nil {
+	if runner, err = sim.NewRunner(*uri, *tlsCAFile, *tlsCertificateKeyFile); err != nil {
 		log.Fatal(err)
 	}
 	runner.SetTPS(*tps)
 	runner.SetTemplateFilename(*file)
 	runner.SetVerbose(*verbose)
-	runner.SetPeekingMode(*peek)
 	runner.SetSimulationDuration(*duration)
+	runner.SetPeekingMode(*peek)
 	runner.SetDropFirstMode(*drop)
 	runner.SetNumberConnections(*conn)
 	runner.SetTransactionTemplateFilename(*tx)
 	runner.SetSimOnlyMode(*simonly)
+	runner.SetAutoMode(*yes)
 	if err = runner.Start(); err != nil {
 		log.Fatal(err)
 	}
 	runner.CollectAllStatus()
+}
+
+func handler(w http.ResponseWriter, r *http.Request) {
+	json.NewEncoder(w).Encode(map[string]interface{}{"ok": 1, "message": "hello keyhole!"})
 }

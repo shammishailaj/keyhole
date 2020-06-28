@@ -70,13 +70,9 @@ func (rn *Runner) initSimDocs() {
 //	favoriteSports2
 //	favoriteSports3
 // }
-func PopulateData(uri string, sslCAFile string, sslPEMKeyFile string) error {
+func (rn *Runner) PopulateData() error {
 	var err error
-	var client *mongo.Client
-	if client, err = mdb.NewMongoClient(uri, sslCAFile, sslPEMKeyFile); err != nil {
-		return err
-	}
-	c := client.Database(SimDBName).Collection(CollectionName)
+	c := rn.client.Database(rn.dbName).Collection(rn.collectionName)
 	btime := time.Now()
 	for time.Now().Sub(btime) < time.Minute {
 		var contentArray []interface{}
@@ -100,11 +96,11 @@ func (rn *Runner) Simulate(duration int, transactions []Transaction, thread int)
 	var ctx = context.Background()
 	var totalTPS int
 
-	if client, err = mdb.NewMongoClient(rn.uri, rn.sslCAFile, rn.sslPEMKeyFile); err != nil {
+	if client, err = mdb.NewMongoClient(rn.uri, rn.tlsCAFile, rn.tlsCertificateKeyFile); err != nil {
 		return err
 	}
 	defer client.Disconnect(ctx)
-	c := client.Database(SimDBName).Collection(CollectionName)
+	c := client.Database(rn.dbName).Collection(rn.collectionName)
 	// metrics := map[string][]bson.M{}
 	minutes := 1
 
@@ -197,8 +193,8 @@ func (rn *Runner) Simulate(duration int, transactions []Transaction, thread int)
 					sum += t
 				}
 				length := len(v)
-				p95 := int64(float64(length) * .95)
-				p99 := int64(float64(length) * .99)
+				p95 := int64(float64(length+1) * .95)
+				p99 := int64(float64(length+1) * .99)
 				stats += fmt.Sprintf("\n\t[%12s] (samples, min, avg, p95, p99, max) = (%v, %v, %v, %v, %v, %v)",
 					k, length, v[0], sum/time.Duration(length), v[p95], v[p99], v[length-1])
 			}
